@@ -1,4 +1,5 @@
 #include "WPILib.h"
+#include "Timer.h"
 
 #define A_BUTTON 1
 #define B_BUTTON 2
@@ -9,11 +10,15 @@
 #define SELECT_BUTTON 7
 #define START_BUTTON 8
 
+float squareDrive(float);
+
 class Robot: public IterativeRobot
 {
 	IMAQdxSession session;
 	Image *frame;
 	IMAQdxError imaqError;
+
+	BCGOptions_struct options;
 
 	Joystick controller;
 	Talon right_motor;
@@ -22,7 +27,10 @@ class Robot: public IterativeRobot
 	Talon shoot_motor_1;
 	Talon shoot_motor_2;
 	Victor kick_motor;
+	Encoder encoder_right;
+	Encoder encoder_left;
 	bool isDebugging;
+	bool armDown;
 
 
 public:
@@ -34,8 +42,22 @@ public:
 		shoot_motor_1(3),
 		shoot_motor_2(4),
 		kick_motor(5),
+		encoder_right(0, 1, false, Encoder::k4X),
+		encoder_left(2, 3, false, Encoder::k4X),
 		isDebugging(false)
 		{
+			encoder_right.SetSamplesToAverage(5);
+			encoder_left.SetSamplesToAverage(5);
+			// Defines how far the mechanism attached to the encoder moves per pulse.
+			// In this case, we assume that a 360 count encoder is directly attached
+			//   to a 3 inch diameter (1.5inch radius) wheel, and that we want to
+			//   measure distance in inches.
+			encoder_right.SetDistancePerPulse((1.0 / 497.0 * 3.1415 * 4.0) / 100.0);
+			encoder_left.SetDistancePerPulse((1.0 / 497.0 * 3.1415 * 4.0) / 100.0);
+
+			encoder_right.SetMinRate(1.0);
+			encoder_left.SetMinRate(1.0);
+
 		}
 
 	void RobotInit()override
@@ -56,27 +78,38 @@ public:
 
 	void AutonomousInit()
 	{
-
+		encoder_right.Reset();
+		armDown = false;
 	}
 
 	void AutonomousPeriodic()
 	{
-		raise_motor.Set(-0.75);
-		Wait(1500);
-		raise_motor.Set(0);
-		Wait(500);
-		right_motor.Set(0.5);
-		left_motor.Set(0.5);
-		Wait(3000);
-		right_motor.Set(0);
-		left_motor.Set(0);
+		if(armDown == false)
+		{
+			raise_motor.Set(-0.2);
+			Wait(2);
+			raise_motor.Set(0);
+			armDown = true;
+		}
+		if(encoder_right.GetDistance() < 2.5)
+		{
+			right_motor.Set(-0.3);
+			left_motor.Set (0.3);
+		}
 
+		else
+		{
+			right_motor.Set(0);
+			left_motor.Set(0);
+
+		}
 
 	}
 
 	void TeleopInit()
 	{
-
+		encoder_right.Reset();
+		encoder_left.Reset();
 	}
 
 	
@@ -94,7 +127,40 @@ public:
 			}
 			else
 			{
+				//imaqDrawShapeOnImage(frame, frame, { 10, 10, 100, 100 }, DrawMode::IMAQ_DRAW_VALUE, ShapeMode::IMAQ_SHAPE_OVAL, 0.0f);
+
+				//imaqColorEqualize(frame,frame,1);
+
+				//options.contrast = 50; //75; //50
+				//options.brightness = 0.5;//.50; // 10
+				//options.gamma = 1; //5; // 1
+				//imaqBCGTransform(frame,frame,&options,NULL);
+				//imaqColorBCGTransform(frame,frame,&options,&options,&options,NULL);
+
+				CameraServer::GetInstance()->SetImage(frame);
+				CameraServer::GetInstance()->SetQuality(50);
+				std::shared_ptr<USBCamera> camera(new USBCamera("cam0", true));
+				camera->SetExposureManual(25); // 100 // change this value //this was 1
+				//camera->SetBrightness(100); // change this value // this was 100
+				//camera->SetWhiteBalanceManual(2);//this was 100
+				//CameraServer::GetInstance()->StartAutomaticCapture(camera);
+				camera->SetExposureHoldCurrent();
+				//camera->SetWhiteBalanceHoldCurrent();
+				//camera->UpdateSettings();
+
 			}
+
+			// Retrieve the net displacement of the Left Encoder since the last Reset.
+			SmartDashboard::PutNumber("R Encoder Distance in ft: ", encoder_right.GetDistance());
+			SmartDashboard::PutNumber("R Encoder in inches: ", (encoder_right.GetDistance()) * 12.0);
+			// Retrieve the current rate of the encoder.
+			SmartDashboard::PutNumber("R Encoder Rate", encoder_right.GetRate());
+			// Retrieve the net displacement of the Encoder since the lsat Reset.
+			SmartDashboard::PutNumber("L Encoder Distance in ft: ", encoder_left.GetDistance());
+			SmartDashboard::PutNumber("L Encoder Distance in inches: ", (encoder_left.GetDistance()) * 12.0);
+			// Retrieve the current rate of the encoder.
+			SmartDashboard::PutNumber("LEncoder Rate", encoder_left.GetRate());
+
 
 			if(isDebugging == true)
 			{
@@ -105,6 +171,7 @@ public:
 
 				right_motor.Set(driveStraight - driveBackwards + driveLeft - driveRight);
 				left_motor.Set(driveStraight - driveBackwards + driveLeft - driveRight);
+
 			}
 			else if(controller.GetRawButton(SELECT_BUTTON) == true)
 			{
@@ -130,12 +197,12 @@ public:
 			if (controller.GetRawAxis(1) < -0.2)
 			{
 				float speed = controller.GetRawAxis(1) * controller.GetRawAxis(1);
-				raise_motor.Set(-speed);
+				raise_motor.Set(speed);
 			}
 			else if (controller.GetRawAxis(1) > 0.2)
 			{
 				float speed = controller.GetRawAxis(1) * controller.GetRawAxis(1);
-				raise_motor.Set(speed);
+				raise_motor.Set(-speed);
 			}
 			else
 			{
@@ -144,27 +211,17 @@ public:
 
 			if(controller.GetRawButton(B_BUTTON) == true)
 			{
-				kick_motor.Set(0.5);
-			}
-			else if(controller.GetRawButton(X_BUTTON) == true)
-			{
+				kick_motor.Set(1);
+				Wait(0.1);
 				kick_motor.Set(-0.5);
-			}
-			else
-			{
+				Wait(0.15);
 				kick_motor.Set(0);
 			}
+				float yIn = controller.GetRawAxis(5);
+				float xIn = controller.GetRawAxis(4);
 
-
-
-				float right_Stick_FB = controller.GetRawAxis(5);
-				float right_Stick_LR = controller.GetRawAxis(4);
-				right_Stick_FB = right_Stick_FB * right_Stick_FB * right_Stick_FB;
-				right_Stick_LR = right_Stick_LR * right_Stick_LR * right_Stick_LR;
-
-				right_motor.Set(right_Stick_FB + right_Stick_LR);
-				left_motor.Set(right_Stick_LR - right_Stick_FB);
-
+				right_motor.Set((squareDrive(yIn) + squareDrive(xIn)) / 2);
+				left_motor.Set((squareDrive(xIn) - squareDrive(yIn)) / 2);
 
 				Wait(0.005);				// wait for a motor update time
 		}
@@ -174,6 +231,7 @@ public:
 
 	}
 
+
 	void TestPeriodic()
 	{
 
@@ -181,3 +239,30 @@ public:
 };
 
 START_ROBOT_CLASS(Robot)
+
+float squareDrive(float val) {
+	if(val > 0.05) {
+		val = val*val;
+		return val;
+	}
+	else if(val < -0.05) {
+		val = -(val*val);
+		return val;
+	}
+	else {
+		return 0;
+	}
+}
+/*void DriveForward(float velocity, float time)
+	{
+
+		right_motor.Set(velocity * -1);
+		left_motor.Set(velocity);
+
+		Wait(time);
+
+		rightmotor.Set(0);
+		leftmotor.Set(0);
+
+	}
+	*/
